@@ -57,6 +57,7 @@ install(TARGETS pelco_d
         LIBRARY DESTINATION lib
         ARCHIVE DESTINATION lib)
 install(DIRECTORY include/ DESTINATION include)
+install(FILES README.md docs/API.md DESTINATION share/doc/pelco_d)
 
 # 测试程序：pelco_d_test
 add_executable(pelco_d_test test/main.cpp)
