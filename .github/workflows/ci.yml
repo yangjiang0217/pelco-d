@@ -1,0 +1,39 @@
+# Pelco-D 协议编解码库 CI
+#
+# 矩阵：Linux / Windows / macOS × 动态库（默认）/ 静态库（可选）
+# 每个任务：配置 -> 构建 -> 运行 CTest
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-test:
+    name: ${{ matrix.os }} / ${{ matrix.static == 'ON' && 'static' || 'shared' }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        static: [OFF, ON]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Configure (shared)
+        if: matrix.static == 'OFF'
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Configure (static)
+        if: matrix.static == 'ON'
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DPELCO_D_BUILD_STATIC=ON
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure

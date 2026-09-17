@@ -1,0 +1,108 @@
+name: Build Multi-Platform (CMake)
+
+# ============================================================
+# 换项目时只改下面 env：
+#   PROJECT: 发布产物名前缀（决定 Release 附件名与包内目录名）
+# 发布哪些目标（exe / 动态库 / 静态库）不用在这里声明：
+#   在 CMakeLists.txt 里用 install(TARGETS ...) 声明即可，
+#   CI 自动用 cmake --install 收集产物并打包。
+# 例如:
+#   install(TARGETS hello mylib
+#           RUNTIME DESTINATION bin   # exe / .dll
+#           LIBRARY DESTINATION lib   # .so / .dylib
+#           ARCHIVE DESTINATION lib)  # .a / .lib
+# C++ 项目额外改：cmake/linux-arm64-toolchain.cmake 加
+#   CMAKE_CXX_COMPILER，且安装步骤加 g++-aarch64-linux-gnu
+# ============================================================
+env:
+  PROJECT: pelco_d
+
+on:
+  push:
+    tags:
+      - 'v*'              # 打 tag 触发，例如: git tag v1.0 && git push --tags
+  workflow_dispatch:      # 支持在 Actions 页面手动触发
+
+# 关键：GITHUB_TOKEN 默认可能是只读权限，创建 Release 需要显式声明 contents: write
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target.name }}
+    runs-on: ${{ matrix.target.runner }}
+    # 注意：job 级 env 中不能引用 ${{ env.PROJECT }}（env context 在此阶段不可用），
+    # 压缩包名表达式内联在下方使用位置（run / with 中 env + matrix 均可用）
+    strategy:
+      fail-fast: false    # 某个平台失败，不影响其他平台继续构建
+      matrix:
+        target:
+          # Windows x86 (32位): MSVC 生成器 -A Win32
+          - { name: Windows-x86,   runner: windows-latest, suffix: windows-x86,   pkg: zip,
+              cmake_args: '-A Win32' }
+          # Windows x64 (64位)
+          - { name: Windows-x64,   runner: windows-latest, suffix: windows-x64,   pkg: zip,
+              cmake_args: '-A x64' }
+          # Windows ARM64
+          - { name: Windows-ARM64, runner: windows-latest, suffix: windows-arm64, pkg: zip,
+              cmake_args: '-A ARM64' }
+          # Linux x86_64: 原生 gcc
+          - { name: Linux-x86_64,  runner: ubuntu-latest,  suffix: linux-x86_64,  pkg: tgz,
+              cmake_args: '-DCMAKE_BUILD_TYPE=Release' }
+          # Linux ARM64: 交叉编译 (toolchain 文件)
+          - { name: Linux-arm64,   runner: ubuntu-latest,  suffix: linux-arm64,   pkg: tgz,
+              cmake_args: '-DCMAKE_TOOLCHAIN_FILE=cmake/linux-arm64-toolchain.cmake -DCMAKE_BUILD_TYPE=Release' }
+          # macOS universal: x86_64 + arm64 双架构
+          - { name: macOS-universal, runner: macos-latest, suffix: macos-universal, pkg: tgz,
+              cmake_args: '-DCMAKE_OSX_ARCHITECTURES="x86_64;arm64" -DCMAKE_BUILD_TYPE=Release' }
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v5
+
+      - name: Install Linux ARM64 cross compiler
+        if: matrix.target.name == 'Linux-arm64'
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+
+      - name: Configure (CMake)
+        run: cmake -B build ${{ matrix.target.cmake_args }}
+
+      - name: Build (CMake)
+        run: cmake --build build --config Release
+
+      # 用 cmake --install 收集所有发布目标（exe/dll/so/dylib/a/lib），
+      # 按 CMakeLists.txt 的 install 规则自动分类到 bin/ 和 lib/
+      - name: Stage and compress artifact
+        shell: bash
+        run: |
+          ARTIFACT="${{ env.PROJECT }}-${{ matrix.target.suffix }}${{ matrix.target.pkg == 'zip' && '.zip' || '.tar.gz' }}"
+          cmake --install build --config Release --prefix "dist/$PROJECT"
+          cd dist
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            powershell -Command "Compress-Archive -Path '$PROJECT\*' -DestinationPath '$ARTIFACT'"
+          else
+            tar -czf "$ARTIFACT" "$PROJECT"
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PROJECT }}-${{ matrix.target.suffix }}${{ matrix.target.pkg == 'zip' && '.zip' || '.tar.gz' }}
+          path: dist/${{ env.PROJECT }}-${{ matrix.target.suffix }}${{ matrix.target.pkg == 'zip' && '.zip' || '.tar.gz' }}
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
