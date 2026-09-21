@@ -58,11 +58,11 @@ jobs:
 
     steps:
       - name: Checkout source
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Install Linux ARM64 cross compiler
         if: matrix.target.name == 'Linux-arm64'
-        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu --no-install-recommends
 
       - name: Configure (CMake)
         run: cmake -B build ${{ matrix.target.cmake_args }}
@@ -79,30 +79,33 @@ jobs:
           cmake --install build --config Release --prefix "dist/$PROJECT"
           cd dist
           if [ "$RUNNER_OS" = "Windows" ]; then
-            powershell -Command "Compress-Archive -Path '$PROJECT\*' -DestinationPath '$ARTIFACT'"
+            7z a -tzip "$ARTIFACT" "$PROJECT"
           else
             tar -czf "$ARTIFACT" "$PROJECT"
           fi
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
-          name: ${{ env.PROJECT }}-${{ matrix.target.suffix }}${{ matrix.target.pkg == 'zip' && '.zip' || '.tar.gz' }}
+          name: ${{ env.PROJECT }}-${{ matrix.target.suffix }}
           path: dist/${{ env.PROJECT }}-${{ matrix.target.suffix }}${{ matrix.target.pkg == 'zip' && '.zip' || '.tar.gz' }}
 
   release:
     name: Create GitHub Release
     needs: build
+    if: ${{ success() }}   # 只有全部 build job 成功，才执行 release
     runs-on: ubuntu-latest
     steps:
       - name: Download all build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
-          files: artifacts/*/*
+          files: artifacts/*/*.{zip,tar.gz}
+          generate_release_notes: true
+          name: Release ${{ github.ref_name }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
